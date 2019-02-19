@@ -19,7 +19,8 @@ add_executable(lib-core-cmd
     src/RequestResponce.hpp
     src/PathResolver.hpp
     src/ThreadDispatcher.hpp
-    src/LogPrinter.hpp)
+    src/LogPrinter.hpp
+    src/Helper.hpp)
 
 add_dependencies(lib-core-cmd network-uri)
 

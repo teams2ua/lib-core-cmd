@@ -27,81 +27,14 @@
 #include "api/Configuration.hpp"
 #include "api/KeychainEngines.hpp"
 #include "wallet/currencies.hpp"
+#include "Helper.hpp"
 #include <functional>
-
-using namespace ledger::core;
-
-#define GET_SYNC(type, operation) sync<api::type ## Callback, api::type>([&](std::shared_ptr<api::type ## Callback> & callback) { operation; });
-
-class EventReceiver : public api::EventReceiver {
-public:
-	void onEvent(const std::shared_ptr<api::Event> & incomingEvent) override {
-		std::lock_guard<std::mutex> guard(_lock);
-		if (incomingEvent->getCode() == api::EventCode::SYNCHRONIZATION_FAILED) {
-			_error = api::Error(api::ErrorCode::UNKNOWN, "Synchronization failed");
-			_cond.notify_all();
-			return;
-		}
-		if (incomingEvent->getCode() == api::EventCode::SYNCHRONIZATION_SUCCEED ||
-			incomingEvent->getCode() == api::EventCode::SYNCHRONIZATION_SUCCEED_ON_PREVIOUSLY_EMPTY_ACCOUNT){
-			done = true;
-			_cond.notify_all();
-		}
-	}
-
-	void wait() {
-		std::unique_lock<std::mutex> lk(_lock);
-		_cond.wait(lk, [&] { return _error || done; });
-		if (done)
-			return;
-		throw std::runtime_error(_error.value().message);
-	}
-private:
-	std::experimental::optional<api::Error> _error;
-	bool done{false};
-	std::mutex _lock;
-	std::condition_variable _cond;
-};
-
-template<typename CallbackType, typename ParameterType>
-class Callback : public CallbackType {
-public:
-	
-	void onCallback(const ParameterType & value, const std::experimental::optional<api::Error> & error) override {
-		std::lock_guard<std::mutex> guard(_lock);
-		if (error) {
-			_error = error;
-		}
-		else {
-			_result = value;
-		}
-		_cond.notify_all();
-	}
-
-	ParameterType WaitForResult() {
-		std::unique_lock<std::mutex> lk(_lock);
-		_cond.wait(lk, [&] { return _error || _result; });
-		if (_result)
-			return _result;
-		throw std::runtime_error(_error.value().message);
-	}
-private:
-	std::experimental::optional<api::Error> _error;
-	ParameterType _result;
-	std::mutex _lock;
-	std::condition_variable _cond;
-};
-
-template<typename CallbackType, typename ParameterType>
-std::shared_ptr<ParameterType> sync(std::function<void(std::shared_ptr<CallbackType>)> operation) {
-	auto cb = std::make_shared<Callback<CallbackType, std::shared_ptr<ParameterType>>>();
-	operation(cb);
-	return cb->WaitForResult();
-}
 
 int main(int argc, char** argv) {
 	try
 	{
+		std::string xpub = "xpub6CQRBg1k8KN2yZfWUywHt9dtDSEFfHhwhBrEjzuHj5YBV2p81NEviAhEhGzYpC5AzwuL6prM2wc1oyMQ8hmsCKqrWwHrjcboQvkBctC1JTq";
+
 		auto executionContext = std::make_shared<AsioExecutionContext>();
 		executionContext->start();
 		auto httpClient = std::make_shared<AsioHttpClient>(executionContext);
@@ -132,7 +65,7 @@ int main(int argc, char** argv) {
 		// create account
 		api::ExtendedKeyAccountCreationInfo info;
 		info.index = 0;
-		info.extendedKeys.push_back("xpub6CQRBg1k8KN2yZfWUywHt9dtDSEFfHhwhBrEjzuHj5YBV2p81NEviAhEhGzYpC5AzwuL6prM2wc1oyMQ8hmsCKqrWwHrjcboQvkBctC1JTq");
+		info.extendedKeys.push_back(xpub);
 		auto account = GET_SYNC(Account, wallet->newAccountWithExtendedKeyInfo(info, callback));
 		
 		// sync account

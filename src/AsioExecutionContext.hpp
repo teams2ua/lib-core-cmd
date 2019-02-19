@@ -20,10 +20,6 @@ public:
 
 	void start();
 	void stop();
-
-private:
-	void run();
-    bool runOne();
 public:
     boost::asio::io_service _io_service;
 private:

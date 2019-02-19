@@ -1,28 +1,36 @@
-#pragma once
-#include "../include/AsioExecutionContext.hpp"
-#include <api/Runnable.hpp>
+#include <memory>
+#include "AsioExecutionContext.hpp"
+#include "api/Runnable.hpp"
+#include <iostream>
 
 void AsioExecutionContext::execute(const std::shared_ptr<ledger::core::api::Runnable> & runnable) {
-    q.push(runnable);
+	_io_service.post([runnable]() { runnable->run(); });
 };
 
 void AsioExecutionContext::delay(const std::shared_ptr<ledger::core::api::Runnable> & runnable, int64_t millis) {
 
 }
 
-bool AsioExecutionContext::runOne() {
-    if (q.empty())
-        return false;
-    auto x = q.front();
-    q.pop();
-    x->run();
-    return true;
-};
+void AsioExecutionContext::start() {
+	shouldStop = false;
+	std::swap(executionThread, std::thread([&]() {
+		while (true) {
+			try {
+				if ((_io_service.run() == 0) && shouldStop) // exit only when there are nothing more to do
+					return;
+				_io_service.reset();
+			}
+			catch (std::exception const& r) {
+				std::cout << r.what() << std::endl;
+			}
+			catch (...) {
+				std::cout << "Something bad happened" << std::endl;
+			}
+		}
+	}));
+}
 
-void AsioExecutionContext::run() {
-    while (true) {
-        while (runOne());
-        if (_io_service.run() == 0)
-            return;
-    }
+void AsioExecutionContext::stop() {
+	shouldStop = true;
+	executionThread.join();
 }

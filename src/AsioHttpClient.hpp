@@ -6,6 +6,7 @@
 #include "api/HttpReadBodyResult.hpp"
 #include "api/HttpUrlConnection.hpp"
 #include "api/HttpRequest.hpp"
+#include <boost/asio/ssl.hpp>
 
 class AsioExecutionContext;
 
@@ -15,4 +16,5 @@ public:
     void execute(const std::shared_ptr<ledger::core::api::HttpRequest> &request) override;
 private:
     std::shared_ptr<AsioExecutionContext> _context;
+	boost::asio::ssl::context _ssl_ctx;
 };

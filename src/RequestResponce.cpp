@@ -2,6 +2,7 @@
 #include <boost/asio.hpp>
 #include "api/HttpReadBodyResult.hpp"
 #include "api/HttpRequest.hpp"
+#include <openssl/ssl.h>
 
 using namespace boost;
 using namespace boost::asio;
@@ -27,60 +28,163 @@ ledger::core::api::HttpReadBodyResult HttpUrlConnection::readBody() {
 }
 
 RequestResponse::RequestResponse(
-    io_context& io_context,
-    const std::string& url,
-    const std::shared_ptr<ledger::core::api::HttpRequest> &request)
-    : resolver_(io_context)
-    , socket_(io_context)
-    , _uri(url)
-    , apiRequest_(request)
+	io_context& io_context,
+	boost::asio::ssl::context& ssl_ctx,
+	const std::shared_ptr<ledger::core::api::HttpRequest> &request)
+	: resolver_(io_context)
+	, socket_(io_context)
+	, stream_(io_context, ssl_ctx)
+	, _uri(request->getUrl())
+	, apiRequest_(request)
 {
-    urlConnection = std::make_shared<HttpUrlConnection>();
-    std::ostream request_stream(&request_);
-    request_stream << "GET " << url << " HTTP/1.0\r\n";
-    request_stream << "Host: " << _uri.authority().to_string() << "\r\n";
-    request_stream << "Accept: */*\r\n";
-    request_stream << "Connection: close\r\n\r\n";
+	urlConnection = std::make_shared<HttpUrlConnection>();
+
+	// Set SNI Hostname (many hosts need this to handshake successfully)
+	if (!SSL_set_tlsext_host_name(stream_.native_handle(), _uri.authority().to_string().c_str()))
+	{
+		boost::system::error_code ec{ static_cast<int>(::ERR_get_error()), boost::asio::error::get_ssl_category() };
+		std::cerr << ec.message() << "\n";
+		return;
+	}
+
+	// Set up an HTTP GET request message
+	req_.version(11);
+	req_.method(http::verb::get);
+	std::string target = _uri.path().to_string();
+	if (!_uri.query().empty())
+		target += "?" + _uri.query().to_string();
+	if (!_uri.fragment().empty())
+		target += "#" + _uri.fragment().to_string();
+	req_.target(target);
+	req_.set(http::field::host, _uri.authority().to_string());
+	req_.set(http::field::user_agent, BOOST_BEAST_VERSION_STRING);
+	for (auto& x : request->getHeaders()) {
+		req_.set(x.first, x.second);
+	}
 }
 
 void RequestResponse::execute() {
-        
+	std::string authority = _uri.host().to_string();
+	std::string port = _uri.port().to_string();
+	if (port.empty()) {
+		port = _uri.scheme().to_string();
+	}
     resolver_.async_resolve(
-        _uri.authority().to_string(),
-        "http",
-        [this](const error_code& err, const ip::tcp::resolver::results_type& endpoints) {
-        handle_resolve(err, endpoints);
+        authority,
+		port,
+        [self = shared_from_this()](const system::error_code& err, const ip::tcp::resolver::results_type& endpoints) {
+        self->handle_resolve(err, endpoints);
     });
 }
 
-void RequestResponse::handle_resolve(const error_code& err,
+void RequestResponse::handle_resolve(const system::error_code& err,
     const ip::tcp::resolver::results_type& endpoints)
 {
-    if (!err)
-    {
+    if (!err) {
         // Attempt a connection to each endpoint in the list until we
         // successfully establish a connection.
-
-        async_connect(socket_, endpoints,
-            [this](const error_code& err, const tcp::endpoint& endpoint) 
-        {
-            handle_connect(err); 
-        });
+		if (_uri.scheme().to_string() == "https") {
+			async_connect(
+				stream_.next_layer(),
+				endpoints,
+				[self = shared_from_this()](const system::error_code& err, const tcp::endpoint& endpoint)
+				{
+					self->ssl_handle_connect(err);
+				}
+			);
+		}
+		else {
+			async_connect(socket_, endpoints,
+				[self = shared_from_this()](const system::error_code& err, const tcp::endpoint& endpoint)
+			{
+				self->handle_connect(err);
+			});
+		}
     }
-    else
-    {
+    else {
         apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::UNABLE_TO_CONNECT_TO_HOST, err.message()));
     }
 }
 
-void RequestResponse::handle_connect(const asio::error_code& err)
+void RequestResponse::ssl_handle_connect(const system::error_code& err)
+{
+	if (!err)
+	{
+		// The connection was successful. Send the request.
+		stream_.async_handshake(boost::asio::ssl::stream_base::client,
+			[self = shared_from_this()](const system::error_code& err) {self->ssl_handle_handshake(err); });
+	}
+	else
+	{
+		apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::UNABLE_TO_CONNECT_TO_HOST, err.message()));
+	}
+}
+
+void RequestResponse::ssl_handle_handshake(const boost::system::error_code& err)
+{
+	if (err) {
+		apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::UNABLE_TO_CONNECT_TO_HOST, err.message()));
+		return;
+	}
+
+	// Send the HTTP request to the remote host
+	http::async_write(
+		stream_,
+		req_,
+		[self = shared_from_this()](const system::error_code& err,
+			std::size_t bytes_transferred) {self->ssl_handle_write_request(err); });
+}
+
+void RequestResponse::ssl_handle_write_request(const system::error_code& err)
+{
+	if (!err) {
+		// Read the response status line. The response_ streambuf will
+		// automatically grow to accommodate the entire line. The growth may be
+		// limited by passing a maximum size to the streambuf constructor.
+		http::async_read(stream_, buffer_, res_,
+			[self = shared_from_this()](const system::error_code& err,
+				std::size_t bytes_transferred) {
+			//std::cout << self->req_.begin() << std::endl;
+			self->ssl_handle_read_response(err); 
+		});
+
+	}
+	else {
+		apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
+	}
+}
+
+
+void RequestResponse::ssl_handle_read_response(const system::error_code& err)
+{
+	if (err) {
+		apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
+		return;
+	}
+
+	urlConnection->statusCode = res_.result_int();
+	urlConnection->body = res_.body();
+	apiRequest_->complete(urlConnection, std::experimental::optional<api::Error>());
+
+	stream_.async_shutdown(
+		[self = shared_from_this()](const system::error_code& err) {
+			self->ssl_handle_shutdown(err);
+	});
+}
+
+void RequestResponse::ssl_handle_shutdown(const system::error_code& err) {
+	//if (err)
+		//apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
+}
+
+void RequestResponse::handle_connect(const system::error_code& err)
 {
     if (!err)
     {
         // The connection was successful. Send the request.
-        asio::async_write(socket_, request_,
-            [this](const asio::error_code& err,
-                std::size_t bytes_transferred) {handle_write_request(err); });
+        http::async_write(socket_, req_,
+            [self = shared_from_this()](const system::error_code& err,
+                std::size_t bytes_transferred) {self->handle_write_request(err); });
     }
     else
     {
@@ -88,110 +192,37 @@ void RequestResponse::handle_connect(const asio::error_code& err)
     }
 }
 
-void RequestResponse::handle_write_request(const asio::error_code& err)
+void RequestResponse::handle_write_request(const system::error_code& err)
 {
-    if (!err)
-    {
+    if (!err) {
         // Read the response status line. The response_ streambuf will
         // automatically grow to accommodate the entire line. The growth may be
         // limited by passing a maximum size to the streambuf constructor.
-
-        asio::async_read_until(socket_, response_, "\r\n",
-            [this](const asio::error_code& err,
-                std::size_t bytes_transferred) {handle_read_status_line(err); });
+		http::async_read(socket_, buffer_, res_,
+                    [self=shared_from_this()](const system::error_code& err,
+                std::size_t bytes_transferred) {self->handle_read_response(err); });
 
     }
-    else
-    {
+    else {
         apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
     }
 }
 
-void RequestResponse::handle_read_status_line(const asio::error_code& err)
+
+void RequestResponse::handle_read_response(const system::error_code& err)
 {
-    if (!err)
-    {
-        // Check that response is OK.
-        std::istream response_stream(&response_);
-        std::string http_version;
-        response_stream >> http_version;
-        unsigned int status_code;
-        response_stream >> status_code;
-        std::string status_message;
-        std::getline(response_stream, status_message);
-        if (!response_stream || http_version.substr(0, 5) != "HTTP/")
-        {
-            apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::HTTP_ERROR, "Server send not a HTTP response"));
-            return;
-        }
-        urlConnection->statusCode = status_code;
-        urlConnection->statusText = status_message;
-        if (status_code != 200)
-        {
-            apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::HTTP_ERROR, status_message));
-            return;
-        }
+	if (err) {
+		apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
+		return;
+	}
 
-        // Read the response headers, which are terminated by a blank line.
+	urlConnection->statusCode = res_.result_int();
+	urlConnection->body = res_.body();
+	apiRequest_->complete(urlConnection, std::experimental::optional<api::Error>());
 
-        asio::async_read_until(socket_, response_, "\r\n\r\n",
-            [this](const asio::error_code& err,
-                std::size_t bytes_transferred) { handle_read_headers(err); });
-    }
-    else
-    {
+	// Gracefully close the socket
+	system::error_code ec;
+	socket_.shutdown(tcp::socket::shutdown_both, ec);
+	if ( ec && ec != boost::system::errc::not_connected)
         apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
-    }
-}
-
-void RequestResponse::handle_read_headers(const asio::error_code& err)
-{
-    if (!err)
-    {
-        // Process the response headers.
-        std::istream response_stream(&response_);
-        std::string header;
-        while (std::getline(response_stream, header) && header != "\r")
-        {
-            //TODO: fix this, make a split at :
-            urlConnection->headers[header] = header;
-        }
-
-        // Start reading remaining data until EOF.
-            
-        asio::async_read(socket_, response_,
-        asio::transfer_at_least(1),
-            [this](const asio::error_code& err,
-                std::size_t bytes_transferred) {handle_read_content(err); });
-
-    }
-    else
-    {
-        apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
-    }
-}
-
-void RequestResponse::handle_read_content(const asio::error_code& err)
-{
-    if (!err)
-    {
-        // Continue reading remaining data until EOF.
-        asio::async_read(
-            socket_, 
-            response_,
-            asio::transfer_at_least(1),
-            [this](const asio::error_code& err,
-                std::size_t bytes_transferred) {handle_read_content(err); }
-        );
-
-    }
-    else if (err == asio::error::eof)
-    {
-        urlConnection->body = std::vector<uint8_t>{ asio::buffers_begin(response_.data()), asio::buffers_end(response_.data()) };
-        apiRequest_->complete(urlConnection, std::experimental::optional<api::Error>());
-    }
-    else
-    {
-        apiRequest_->complete(urlConnection, api::Error(api::ErrorCode::NO_INTERNET_CONNECTIVITY, err.message()));
-    }
 }

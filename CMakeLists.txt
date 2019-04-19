@@ -25,6 +25,7 @@ add_executable(lib-core-cmd
 add_dependencies(lib-core-cmd network-uri)
 
 find_package(OpenSSL REQUIRED)
+# Need OpenSSL to allow boost.beast make https connecions
 target_link_libraries(lib-core-cmd PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 find_package(Boost 1.69 REQUIRED COMPONENTS system context date_time)

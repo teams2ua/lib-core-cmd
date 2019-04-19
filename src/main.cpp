@@ -33,7 +33,10 @@
 int main(int argc, char** argv) {
 	try
 	{
-		std::string xpub = "xpub6CQRBg1k8KN2yZfWUywHt9dtDSEFfHhwhBrEjzuHj5YBV2p81NEviAhEhGzYpC5AzwuL6prM2wc1oyMQ8hmsCKqrWwHrjcboQvkBctC1JTq";
+		//std::string xpub = "xpub6CQRBg1k8KN2yZfWUywHt9dtDSEFfHhwhBrEjzuHj5YBV2p81NEviAhEhGzYpC5AzwuL6prM2wc1oyMQ8hmsCKqrWwHrjcboQvkBctC1JTq";
+
+        // hash of 'ledger', used in tests, no segwit
+        std::string xpub = "xpub661MyMwAqRbcExQa2CM5QpU2GJ2ZyPFmomjNx7QDW1MidgPsZZz7Ew64bMh6K1Uyy7Hu5g5e7ib7KQhEAjw3vZAeHpmvcMRztnJ6YHtwSBG";
 
 		auto executionContext = std::make_shared<AsioExecutionContext>();
 		executionContext->start();
@@ -57,7 +60,9 @@ int main(int argc, char** argv) {
 			dbBackend,
 			config);
 		auto walletConfig = api::DynamicObject::newInstance();
-		walletConfig->putString(api::Configuration::KEYCHAIN_ENGINE, api::KeychainEngines::BIP49_P2SH); // segwit
+		//walletConfig->putString(api::Configuration::KEYCHAIN_ENGINE, api::KeychainEngines::BIP49_P2SH); // segwit
+        walletConfig->putString(api::Configuration::KEYCHAIN_ENGINE, api::KeychainEngines::BIP32_P2PKH);
+        walletConfig->putString(api::Configuration::BLOCKCHAIN_EXPLORER_API_ENDPOINT, "http://127.0.0.1:8080/");
 
 		// get wallet
 		auto wallet = GET_SYNC(Wallet, pool->createWallet("wallet1", ledger::core::currencies::BITCOIN, walletConfig, callback));

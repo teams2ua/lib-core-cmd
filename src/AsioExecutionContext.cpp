@@ -21,10 +21,12 @@ void AsioExecutionContext::start() {
 				_io_service.reset();
 			}
 			catch (std::exception const& r) {
-				std::cout << r.what() << std::endl;
+				std::cout << "Error: " << r.what() << std::endl;
+				throw;
 			}
 			catch (...) {
 				std::cout << "Something bad happened" << std::endl;
+				throw;
 			}
 		}
 	}));

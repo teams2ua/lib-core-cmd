@@ -16,7 +16,7 @@ public:
 	 * @param message, string
 	 */
 	virtual void printInfo(const std::string & message) override {
-		std::cout << "INFO: " << message << std::endl;
+		//std::cout << "INFO: " << message << std::endl;
 	}
 
 	/**
@@ -24,7 +24,7 @@ public:
 	 * @param message string
 	 */
 	virtual void printDebug(const std::string & message) override {
-		std::cout << "DEBUG: " << message << std::endl;
+		//std::cout << "DEBUG: " << message << std::endl;
 	}
 
 	/**

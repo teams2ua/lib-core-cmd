@@ -2,12 +2,19 @@
 
 #include "api/PathResolver.hpp"
 #include <string>
+#include <boost/filesystem.hpp>
 
-class PathResolver : public ledger::core::api::PathResolver {
-public:
-	std::string resolveDatabasePath(const std::string & path) override { return path; };
+namespace libcorecmd {
+	class PathResolver : public ledger::core::api::PathResolver {
+	public:
+		PathResolver(boost::filesystem::path dataFolderPath);
 
-	std::string resolveLogFilePath(const std::string & path) override { return path; };
+		std::string resolveDatabasePath(const std::string& path) override;
 
-	std::string resolvePreferencesPath(const std::string & path) override { return path; };
-};
+		std::string resolveLogFilePath(const std::string& path) override;
+
+		std::string resolvePreferencesPath(const std::string& path) override;
+	private:
+		boost::filesystem::path _dataFolderPath;
+	};
+}

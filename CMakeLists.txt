@@ -34,7 +34,9 @@ add_executable(lib-core-cmd
     src/SyncAccount.hpp
     src/SyncAccount.cpp
     src/BuildTransaction.hpp
-    src/BuildTransaction.cpp)
+    src/BuildTransaction.cpp
+    src/ListCurrencies.hpp
+    src/ListCurrencies.cpp)
 
 add_dependencies(lib-core-cmd network-uri)
 
